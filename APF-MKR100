@@ -1,0 +1,212 @@
+#include <WiFi101.h>
+#include <SPI.h>
+#include <UbidotsArduino.h>
+
+#include <Servo.h>
+#define Echo 2                      //echo es pin 2 
+#define Trigger 3                   //triggger en  pin 3
+#define led 6                       //led en pin 6
+#define sw_modo_automatico 4        
+#define sw_modo_ubidots 8 
+#define sw_modo_manual 7
+
+#define VAR_ULTRASONIDO  "5dceba441d847249c45247ac"  
+#define VAR_DEPOSITOS "5dceba391d84724b1193b1a0"
+#define VAR_SERVO  "5dce40261d8472101994bd27"
+#define TOKEN  "BBFF-5iFM52Zm08NFxUw83rgOgxqGxaaPVP"  
+
+//char ssid[] = "MUNOZ";
+//char pass[] = "4320492805";
+
+char ssid[] = "IoT-B19";
+char pass[] = "meca2017*";
+
+Servo ServoMotor;
+
+float pulso = 0;
+float distancia = 0;
+int posicion = 0;
+int valorActual = 0;
+
+int aux;
+int cont;
+
+unsigned long previousMillis1 = 0;
+int intervalo1 = 30000;
+unsigned long previousMillis2 = 0;
+int intervalo2 = 250;
+unsigned long previousMillis3 = 0;
+int intervalo3 = 300000;
+
+int status = WL_IDLE_STATUS;
+Ubidots client(TOKEN);
+
+void setup() 
+{
+  pinMode(Trigger, OUTPUT);           //set trigger como output
+  pinMode(Echo, INPUT);               //set echo como input
+  pinMode(led,OUTPUT);
+  pinMode(sw_modo_automatico, INPUT);
+  pinMode(sw_modo_ubidots, INPUT);
+  pinMode(sw_modo_manual, INPUT);
+  
+  ServoMotor.attach(9);               //Servo motor en pin 9 
+  analogWrite(Trigger, HIGH);         //Limpiar señal del sensor de ultrasonido
+  digitalWrite(led,LOW);              //Limpiar señar del led
+  ServoMotor.write(90);               //Regresar al punto inical el servo motor
+  Serial.begin(9600);
+  
+  //PROTOCOLO DE CONEXION 
+ while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
+  }
+  if (WiFi.status() == WL_NO_SHIELD) {
+    Serial.println("Escudo Wifi No presente");
+    //No siga
+    while(true);
+  }
+  String fv = WiFi.firmwareVersion();
+  if (fv != "1.1.0") {
+    Serial.println("Por facvor actualize");
+  }
+  // Intente conectarse al wifi
+  while (status != WL_CONNECTED) {
+    Serial.print("Intentado conectar a red: ");
+    Serial.println(ssid);   
+    status = WiFi.begin(ssid, pass);
+    // wait 10 seconds for connection:
+    delay(10000);
+  }
+}
+
+void loop() {
+  
+unsigned long currentMillis1 = millis();
+unsigned long currentMillis2 = millis();
+unsigned long currentMillis3 = millis(); 
+
+  if(digitalRead(sw_modo_automatico) == HIGH)
+  {  
+      Serial.println("Estoy en automatico");
+      if ((unsigned long)(currentMillis2 - previousMillis2) >= intervalo2) {
+        sensorUltrasonido();
+        previousMillis2 = currentMillis2;
+      }
+      if ((unsigned long)(currentMillis1 - previousMillis1) >= intervalo1) {
+        Serial.println("Se puede mover");
+        valorActual = 0;
+        previousMillis1 = currentMillis1;
+      } 
+    modoAutomatico();
+
+  }
+  else if(digitalRead(sw_modo_ubidots) == HIGH)
+  {
+      Serial.println("Estoy en ubidots");
+      if ((unsigned long)(currentMillis3 - previousMillis3) >= intervalo3) {
+        Serial.println("Se puede mover");
+        aux = 2;
+        enviarDatos();
+        aux = 0;
+        cont = 0;
+        previousMillis3 = currentMillis3;
+      }
+    modoUbidots();
+  }
+  else if(digitalRead(sw_modo_ubidots) == LOW && digitalRead(sw_modo_automatico) == LOW )
+  {
+    Serial.println("Estoy en manual");
+    modoManual();
+  }
+  
+  delay(200);
+}
+
+void sensorUltrasonido()
+{
+  digitalWrite(Trigger, HIGH);
+  delayMicroseconds(15);              //Enviamos un pulso de 15us
+  digitalWrite(Trigger, LOW);
+  
+  pulso = pulseIn(Echo, HIGH);       //obtenemos el ancho del pulso
+  distancia = (pulso/59)/100;
+  Serial.print("Ultrasonido: ");
+  Serial.print(distancia);
+  Serial.println(" m"); 
+}
+
+void modoAutomatico()
+{
+  if (distancia <= 0.05 && valorActual == 0) 
+  {
+    aux = 1;
+    moverServo();
+    enviarDatos();
+    aux = 0;
+    valorActual = 1;
+  } 
+}
+
+void modoUbidots()
+{
+   float *responseArray;
+   float value;
+   responseArray = client.getValue(VAR_SERVO);
+   if (responseArray[0] == 1)
+   {
+      value = responseArray[1];
+      Serial.print("Valor del switch: ");
+      Serial.println(value);
+   }else
+   {
+    Serial.println("Error");
+   }
+   delay(2000);
+}
+
+void modoManual()
+{ 
+  if(digitalRead(sw_modo_manual) == HIGH ){
+    Serial.println("Entreeeeeeeee");
+    moverServo();
+  }else{
+    
+  }
+}
+
+void moverServo()
+{
+  Serial.println("ya prendi");
+  digitalWrite(led,HIGH);
+  for (posicion = 90; posicion <= 185; posicion += 1){
+      Serial.print("Servo Motor: ");
+      Serial.println(posicion);
+      ServoMotor.write(posicion);          //Realizar moviento del servo motor por medio del ciclo
+    }
+    delay(2000);
+    for (posicion = 185; posicion >= 90; posicion -= 1){
+      ServoMotor.write(posicion);         //Realizar moviento del servo motor por medio del ciclo
+    }
+    cont ++;
+    digitalWrite(led,LOW);
+}
+
+
+void enviarDatos()
+{
+  switch(aux)
+  {
+    case 1 :
+      Serial.println("Envio de distancia");
+      client.add(VAR_ULTRASONIDO, distancia);
+      client.sendAll();
+    break;
+    case 2 : 
+      Serial.println("Envio de depositos");
+      client.add(VAR_DEPOSITOS, cont);
+      client.sendAll();
+    break;      
+    default:
+    break;
+  }
+}
